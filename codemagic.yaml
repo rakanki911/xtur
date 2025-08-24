@@ -11,7 +11,7 @@ workflows:
       vars:
         BUILD_NAME: "1.0.0"
         BUILD_NUMBER: "1"
-        API_BASE: "https://y.rakanki.com/"   # ← عدّلها
+        API_BASE: "https://y.rakanki.com/"
 
     cache:
       cache_paths:
@@ -19,48 +19,59 @@ workflows:
         - ios/Pods
 
     scripts:
-      - name: Flutter clean & pub get & precache iOS
+      - name: Flutter doctor + pub get + precache iOS
         script: |
           set -euo pipefail
+          flutter doctor -v
           flutter clean
           flutter pub get
           flutter precache --ios
 
-      - name: Prepare iOS (config only, no codesign)
+      - name: Bump iOS minimum + Swift version (Podfile & Xcode)
         script: |
           set -euo pipefail
-          flutter build ios --release --no-codesign --config-only \
-            --build-name $BUILD_NAME --build-number $BUILD_NUMBER \
-            --dart-define=API_BASE=$API_BASE
+          # iOS 13 لضمان توافق الحزم الحديثة
+          /usr/bin/sed -i '' "s/^platform :ios.*/platform :ios, '13.0'/" ios/Podfile || true
 
-      - name: CocoaPods install
+          # ضبط iOS Deployment Target و Swift من خلال post_install إذا وُجد
+          if ! grep -q "post_install do |installer|" ios/Podfile; then
+            cat >> ios/Podfile <<'RUBY'
+post_install do |installer|
+  installer.pods_project.targets.each do |t|
+    t.build_configurations.each do |bc|
+      bc.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+      bc.build_settings['SWIFT_VERSION'] = '5.0'
+    end
+  end
+end
+RUBY
+          fi
+
+      - name: CocoaPods install (نظيف)
         script: |
           set -euo pipefail
+          rm -rf ios/Pods ios/Podfile.lock
           cd ios
           pod repo update
           pod install
           cd ..
 
-      - name: Build with xcodebuild (unsigned)
+      - name: Analyze Dart (يظهر أخطاء الكود بوضوح قبل البناء)
         script: |
           set -euo pipefail
-          xcodebuild \
-            -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            -derivedDataPath build/ios/xcodebuild \
-            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE_SPECIFIER="" \
-            MARKETING_VERSION=$BUILD_NAME CURRENT_PROJECT_VERSION=$BUILD_NUMBER \
-            build
+          flutter analyze || true   # لا تفشل البناء هنا، بس اعرض التحذيرات
+
+      - name: Flutter build iOS (no codesign)
+        script: |
+          set -euo pipefail
+          flutter build ios --release --no-codesign \
+            --build-name $BUILD_NAME --build-number $BUILD_NUMBER \
+            --dart-define=API_BASE=$API_BASE -v
 
       - name: Package unsigned IPA
         script: |
           set -euo pipefail
-          APP_PATH="build/ios/xcodebuild/Build/Products/Release-iphoneos/Runner.app"
+          APP_PATH="build/ios/iphoneos/Runner.app"
           OUT_DIR="build/ios/ipa"
           rm -rf "$OUT_DIR"
           mkdir -p "$OUT_DIR/Payload"
@@ -68,5 +79,5 @@ workflows:
           (cd "$OUT_DIR" && zip -r -y Runner-unsigned.ipa Payload)
 
     artifacts:
-      - build/ios/xcodebuild/Build/Products/Release-iphoneos/Runner.app
+      - build/ios/iphoneos/Runner.app
       - build/ios/ipa/Runner-unsigned.ipa
