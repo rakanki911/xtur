@@ -27,15 +27,12 @@ workflows:
           flutter pub get
           flutter precache --ios
 
-      - name: Bump iOS minimum + Swift version (Podfile & Xcode)
+      - name: Bump iOS minimum + Swift version
         script: |
           set -euo pipefail
-          # iOS 13 لضمان توافق الحزم الحديثة
           /usr/bin/sed -i '' "s/^platform :ios.*/platform :ios, '13.0'/" ios/Podfile || true
-
-          # ضبط iOS Deployment Target و Swift من خلال post_install إذا وُجد
           if ! grep -q "post_install do |installer|" ios/Podfile; then
-            cat >> ios/Podfile <<'RUBY'
+            cat <<'RUBY' >> ios/Podfile
 post_install do |installer|
   installer.pods_project.targets.each do |t|
     t.build_configurations.each do |bc|
@@ -47,7 +44,7 @@ end
 RUBY
           fi
 
-      - name: CocoaPods install (نظيف)
+      - name: CocoaPods install
         script: |
           set -euo pipefail
           rm -rf ios/Pods ios/Podfile.lock
@@ -55,11 +52,6 @@ RUBY
           pod repo update
           pod install
           cd ..
-
-      - name: Analyze Dart (يظهر أخطاء الكود بوضوح قبل البناء)
-        script: |
-          set -euo pipefail
-          flutter analyze || true   # لا تفشل البناء هنا، بس اعرض التحذيرات
 
       - name: Flutter build iOS (no codesign)
         script: |
