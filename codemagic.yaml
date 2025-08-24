@@ -1,0 +1,72 @@
+workflows:
+  ios-release-build:
+    name: iOS Release Build (unsigned)
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      vars:
+        BUILD_NAME: "1.0.0"
+        BUILD_NUMBER: "1"
+        API_BASE: "https://y.rakanki.com/"   # ← عدّلها
+
+    cache:
+      cache_paths:
+        - $HOME/.pub-cache
+        - ios/Pods
+
+    scripts:
+      - name: Flutter clean & pub get & precache iOS
+        script: |
+          set -euo pipefail
+          flutter clean
+          flutter pub get
+          flutter precache --ios
+
+      - name: Prepare iOS (config only, no codesign)
+        script: |
+          set -euo pipefail
+          flutter build ios --release --no-codesign --config-only \
+            --build-name $BUILD_NAME --build-number $BUILD_NUMBER \
+            --dart-define=API_BASE=$API_BASE
+
+      - name: CocoaPods install
+        script: |
+          set -euo pipefail
+          cd ios
+          pod repo update
+          pod install
+          cd ..
+
+      - name: Build with xcodebuild (unsigned)
+        script: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build/ios/xcodebuild \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" PROVISIONING_PROFILE_SPECIFIER="" \
+            MARKETING_VERSION=$BUILD_NAME CURRENT_PROJECT_VERSION=$BUILD_NUMBER \
+            build
+
+      - name: Package unsigned IPA
+        script: |
+          set -euo pipefail
+          APP_PATH="build/ios/xcodebuild/Build/Products/Release-iphoneos/Runner.app"
+          OUT_DIR="build/ios/ipa"
+          rm -rf "$OUT_DIR"
+          mkdir -p "$OUT_DIR/Payload"
+          cp -R "$APP_PATH" "$OUT_DIR/Payload/Runner.app"
+          (cd "$OUT_DIR" && zip -r -y Runner-unsigned.ipa Payload)
+
+    artifacts:
+      - build/ios/xcodebuild/Build/Products/Release-iphoneos/Runner.app
+      - build/ios/ipa/Runner-unsigned.ipa
